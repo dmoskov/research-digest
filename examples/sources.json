@@ -1,0 +1,36 @@
+[
+  {
+    "key": "nber",
+    "name": "NBER Working Papers",
+    "source_type": "academic_journal",
+    "crawler_type": "nber",
+    "subtopics": ["climate", "housing"],
+    "url": "https://www.nber.org/papers",
+    "feed_url": "https://back.nber.org/rss/new.xml"
+  },
+  {
+    "key": "arxiv_econ",
+    "name": "arXiv Economics",
+    "source_type": "preprint",
+    "crawler_type": "arxiv_atom",
+    "subtopics": ["housing"],
+    "crawl_config": { "categories": ["econ.GN"] }
+  },
+  {
+    "key": "nature_energy",
+    "name": "Nature Energy",
+    "source_type": "academic_journal",
+    "crawler_type": "crossref",
+    "subtopics": ["climate"],
+    "issn": "2058-7546"
+  },
+  {
+    "key": "acme_blog",
+    "name": "Acme Foundation Blog",
+    "source_type": "blog",
+    "crawler_type": "rss",
+    "subtopics": ["climate"],
+    "url": "https://acme.org/blog",
+    "feed_url": "https://acme.org/blog/feed"
+  }
+]

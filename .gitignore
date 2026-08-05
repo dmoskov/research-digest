@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.digest-state.json
+.DS_Store
+
+# Transient staging tooling (regenerates this tree from the monorepo copy);
+# obsolete once this repo is the source of truth.
+.stage.sh
+.transform.py
+*.src

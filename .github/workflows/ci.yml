@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: pip install '.[dev]'
+
+      - name: Test
+        # No database and no network: the suite runs against a fixture taxonomy.
+        run: pytest -q
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Ruff
+        run: ruff check .
+
+  package:
+    name: Build + import check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Build wheel and sdist
+        run: |
+          pip install build
+          python -m build
+
+      - name: Install the wheel and check the entrypoints
+        # Installs from the built wheel, not the source tree, so a missing
+        # package-data entry (the schema SQL) fails here rather than in someone
+        # else's deployment.
+        run: |
+          pip install dist/*.whl
+          cd /tmp
+          research-digest --help
+          python -c "
+          from digest.migrate import available_migrations
+          assert available_migrations() == ['001_initial.sql'], available_migrations()
+          print('schema SQL ships in the wheel')
+          "

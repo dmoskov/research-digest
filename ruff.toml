@@ -1,0 +1,11 @@
+line-length = 120
+
+[lint]
+select = ["F", "E501", "E9", "I", "S"]
+
+[lint.per-file-ignores]
+# Tests legitimately use assert and fixture credentials.
+"tests/**" = ["S101", "S105", "S106", "S108"]
+# Embeds multi-paragraph classifier prompt prose in string literals; rewrapping
+# it would change the bytes the model sees (and the prompt cache key).
+"digest/classifiers/relevance_classifier.py" = ["E501"]
