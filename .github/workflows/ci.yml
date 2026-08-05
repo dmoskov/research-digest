@@ -113,13 +113,18 @@ jobs:
       - name: Install the wheel and check the entrypoints
         # Installs from the built wheel, not the source tree, so a missing
         # package-data entry (the schema SQL) fails here rather than in someone
-        # else's deployment.
+        # else's deployment. Deliberately asserts a shape, not a fixed list —
+        # a hardcoded list breaks on every new migration.
         run: |
           pip install dist/*.whl
           cd /tmp
           research-digest --help
           python -c "
           from digest.migrate import available_migrations
-          assert available_migrations() == ['001_initial.sql'], available_migrations()
-          print('schema SQL ships in the wheel')
+          found = available_migrations()
+          assert found, 'no schema SQL shipped in the wheel'
+          assert found[0].startswith('001_'), found
+          assert all(f.endswith('.sql') for f in found), found
+          assert found == sorted(found), f'not in apply order: {found}'
+          print(f'schema SQL ships in the wheel: {len(found)} migration(s)')
           "
