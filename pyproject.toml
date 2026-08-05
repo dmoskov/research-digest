@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "research-digest"
-version = "0.1.0"
+version = "0.1.1"
 description = "Crawl, classify and summarise research sources into topic-filtered digests"
 readme = "README.md"
 requires-python = ">=3.11"

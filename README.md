@@ -39,7 +39,7 @@ is unclassified, so it can fail, be fixed and be re-run without re-crawling.
 ## Quickstart
 
 ```bash
-pip install 'research-digest @ git+https://github.com/dmoskov/research-digest@v0.1.0'
+pip install 'research-digest @ git+https://github.com/dmoskov/research-digest@v0.1.1'
 ```
 
 Extras: `[gemini]` for the non-Anthropic abstract fallback, `[aws]` to read
@@ -226,14 +226,38 @@ and the classifier logs cache counters on every call so you can see it.
 
 ## Testing
 
+Three layers, because the first two cannot catch what the third does.
+
 ```bash
 pip install '.[dev]'
-pytest        # 171 tests, no database, no network, under a second
+pytest                      # 188 unit + contract tests; no database, no network, <1s
 ```
 
-The suite runs against a fixture taxonomy in `tests/conftest.py`, not against
-any real deployment's config, so it stays meaningful after you swap in your own.
-Tests that assert on *your* taxonomy's content belong in your own suite.
+**Unit** — crawler parsing, scoring, classifier prompt assembly, storage SQL
+against a mocked cursor. Runs against a fixture taxonomy in `tests/conftest.py`,
+not any real deployment's config, so it stays meaningful once you swap in your
+own. Tests asserting on *your* taxonomy's content belong in your suite, not here.
+
+**Schema contract** (`tests/test_schema_contract.py`) — parses the shipped SQL
+and the storage layer's own `INSERT` statements and checks they agree. No
+database needed. This exists because a mocked cursor cannot tell a column that
+exists from one that does not; see the 0.1.1 note in CHANGELOG.md.
+
+**Integration** (`tests/test_integration_db.py`) — executes the real schema and
+the real writes against PostgreSQL. Skipped unless `DIGEST_DB_HOST` is set:
+
+```bash
+docker run -d --name rd-test -e POSTGRES_PASSWORD=test -e POSTGRES_USER=test \
+    -e POSTGRES_DB=digest_test -p 5433:5432 postgres:16
+
+DIGEST_DB_HOST=localhost DIGEST_DB_PORT=5433 DIGEST_DB_NAME=digest_test \
+DIGEST_DB_USER=test DIGEST_DB_PASSWORD=test pytest
+```
+
+CI runs all three on every push, the integration layer against a Postgres 16
+service. What no layer covers: live classification, which would mean spending
+tokens on every CI run. The classifier's request assembly and response parsing
+are unit-tested against recorded shapes; the API call itself is not.
 
 ---
 

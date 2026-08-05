@@ -5,6 +5,12 @@ build/
 dist/
 .venv/
 venv/
+# Never commit local credentials: every secret this package reads comes from the
+# environment (ANTHROPIC_API_KEY, DIGEST_DB_*, GEMINI_API_KEY).
+.env
+.env.*
+*.pem
+*.key
 .pytest_cache/
 .ruff_cache/
 .coverage

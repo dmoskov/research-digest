@@ -18,7 +18,7 @@ Submodules are imported lazily: importing :mod:`digest` alone does not require
 a configuration, a database, or an API key.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from digest.settings import DigestConfig, configure, get_config, is_configured
 

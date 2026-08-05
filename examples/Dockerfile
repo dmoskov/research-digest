@@ -15,7 +15,7 @@ WORKDIR /app
 # Install the engine first so this layer caches independently of your taxonomy,
 # which will change far more often.
 RUN pip install --no-cache-dir \
-    'research-digest[gemini,aws] @ git+https://github.com/dmoskov/research-digest@v0.1.0'
+    'research-digest[gemini,aws] @ git+https://github.com/dmoskov/research-digest@v0.1.1'
 
 # Your configuration package — the module DIGEST_CONFIG points at.
 COPY examples/ examples/

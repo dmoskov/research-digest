@@ -28,7 +28,12 @@ CREATE TABLE IF NOT EXISTS items (
     source_name TEXT,              -- journal or publication name
     published_date DATE,
     crawled_at TIMESTAMPTZ DEFAULT NOW(),
-    raw_metadata JSONB DEFAULT '{}'
+    raw_metadata JSONB DEFAULT '{}',
+    -- Refusal tracking: set when the model declines to summarise or classify an
+    -- item, so the second-pass fallback can find them and they are not retried
+    -- forever. Written by digest.storage on every item upsert.
+    api_refused_at TIMESTAMPTZ,
+    api_refusal_type TEXT          -- 'abstract', 'classification', or both
 );
 
 -- Per-subtopic relevance verdict. One row per (item, subtopic).

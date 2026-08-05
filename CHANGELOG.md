@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.1 — 2026-08-05
+
+**Fixes an incomplete initial schema in 0.1.0.** `001_initial.sql` omitted
+`items.api_refused_at` and `items.api_refusal_type`, which `digest.storage`
+writes on every item upsert — so on 0.1.0 `migrate` succeeded and then every
+single item store failed with `column "api_refused_at" does not exist`. A crawl
+would report sources fetched and zero items stored.
+
+Cause: the schema was consolidated from the originating deployment's base
+schema file, which had never absorbed the migration that added those two
+columns. Caught by running the pipeline against a real PostgreSQL rather than
+trusting the unit tests, none of which touch a database.
+
+- `001_initial.sql` now declares both columns, so fresh installs are correct.
+- `002_item_refusal_tracking.sql` adds them idempotently, repairing databases
+  created by 0.1.0 (which recorded 001 as applied, so the corrected 001 will
+  never re-run for them).
+
+Upgrading from 0.1.0: `research-digest migrate`. No data loss either way — the
+failed inserts never committed.
+
 ## 0.1.0 — 2026-08-05
 
 First public release, extracted from the pipeline Coefficient Giving has run in

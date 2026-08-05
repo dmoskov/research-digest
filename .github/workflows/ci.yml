@@ -28,6 +28,55 @@ jobs:
         # No database and no network: the suite runs against a fixture taxonomy.
         run: pytest -q
 
+  integration:
+    name: Integration (real PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: digest_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DIGEST_DB_HOST: localhost
+      DIGEST_DB_PORT: '5432'
+      DIGEST_DB_NAME: digest_test
+      DIGEST_DB_USER: test
+      DIGEST_DB_PASSWORD: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install
+        run: pip install '.[dev]'
+
+      # The unit suite mocks the cursor, so a column the schema never declares
+      # looks identical to one it does. This job executes the shipped SQL and
+      # the storage layer against a real database, which is the only way that
+      # class of bug surfaces before a user hits it.
+      - name: Migrate and run integration tests
+        run: pytest tests/test_integration_db.py -v
+
+      - name: Assert migrate is idempotent from a clean database
+        run: |
+          python -c "
+          from digest.migrate import run_migrations, available_migrations
+          assert run_migrations() == [], 'second migrate re-applied a migration'
+          print('idempotent across', len(available_migrations()), 'migration(s)')
+          "
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
