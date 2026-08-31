@@ -19,7 +19,10 @@ irrelevant and look like a working pipeline producing an empty digest.
 """
 
 from dataclasses import dataclass, field
-from typing import Callable, Dict, FrozenSet, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, FrozenSet, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    import anthropic
 
 # Model defaults. Override per-deployment via DigestConfig; these are the
 # combination the pipeline is tuned and cost-modelled for.
@@ -84,6 +87,15 @@ class DigestConfig:
             ``claude_model_fast`` dominates cost.
         gemini_model: Optional non-Anthropic fallback for abstracts Claude
             declines to summarise. Requires the ``gemini`` extra.
+        anthropic_client_factory: Optional callable returning a configured
+            ``anthropic.Anthropic``. Set it when the deployment's credential is
+            not a static API key — e.g. workload identity federation, where the
+            workload mints a short-lived token per exchange and no secret
+            exists to put in ``ANTHROPIC_API_KEY``. It is called with the
+            pipeline's ``timeout`` and ``max_retries`` keyword arguments and
+            must pass them to the client, so the shared retry policy still
+            applies. When unset the pipeline builds its own client and the SDK
+            reads ``ANTHROPIC_API_KEY``.
     """
 
     org_name: str
@@ -102,6 +114,7 @@ class DigestConfig:
     claude_model: str = DEFAULT_CLAUDE_MODEL
     claude_model_fast: str = DEFAULT_CLAUDE_MODEL_FAST
     gemini_model: Optional[str] = DEFAULT_GEMINI_MODEL
+    anthropic_client_factory: Optional[Callable[..., "anthropic.Anthropic"]] = None
 
     def __post_init__(self):
         if not self.org_name:

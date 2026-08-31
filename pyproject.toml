@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "research-digest"
-version = "0.1.1"
+version = "0.1.2"
 description = "Crawl, classify and summarise research sources into topic-filtered digests"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,7 +28,11 @@ dependencies = [
     "requests==2.32.4",
     "beautifulsoup4==4.14.3",
     "defusedxml==0.7.1",
-    "anthropic==0.75.0",
+    # 1.x, not 0.75: workload identity federation
+    # (anthropic.WorkloadIdentityCredentials, used via
+    # DigestConfig.anthropic_client_factory) does not exist before 1.0, so a
+    # deployment without a static API key cannot build a client at all.
+    "anthropic==1.1.0",
     "psycopg2-binary==2.9.11",
     "curl_cffi==0.14.0",
 ]

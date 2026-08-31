@@ -55,10 +55,13 @@ class TestClassifierFailLoud:
         return RelevanceClassifier(api_key="test-key", use_keyword_prefilter=False)
 
     def _auth_error(self):
-        import httpx
+        # httpx2 rather than httpx: the anthropic 1.x SDK moved to it, and the
+        # error constructor wants a response object of the SDK's own HTTP
+        # library. It arrives as a transitive dependency of anthropic.
+        import httpx2
 
-        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-        response = httpx.Response(401, request=request)
+        request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx2.Response(401, request=request)
         return anthropic.AuthenticationError(
             "invalid api key", response=response, body=None
         )
@@ -83,3 +86,71 @@ class TestClassifierFailLoud:
             )
             assert result["subtopics"]
             assert all(not s["relevant"] for s in result["subtopics"].values())
+
+
+class TestConfiguredClientFactory:
+    """A deployment without a static key supplies its own client factory.
+
+    Workload identity federation is the motivating case: the workload mints a
+    short-lived token per exchange, so there is no secret to put in
+    ANTHROPIC_API_KEY and the SDK cannot build the client on its own.
+    """
+
+    def _configure_with_factory(self, base, factory):
+        """Reinstall the autouse test config with a client factory attached."""
+        from dataclasses import replace
+
+        from digest.settings import configure
+
+        configure(replace(base, anthropic_client_factory=factory))
+
+    def test_factory_is_used_and_gets_the_retry_policy(self, monkeypatch, configured):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        calls = []
+        sentinel = object()
+
+        def factory(**kwargs):
+            calls.append(kwargs)
+            return sentinel
+
+        self._configure_with_factory(configured, factory)
+        assert get_anthropic_client() is sentinel
+        assert calls == [
+            {"timeout": DEFAULT_TIMEOUT_SECONDS, "max_retries": DEFAULT_MAX_RETRIES}
+        ]
+
+    def test_explicit_api_key_wins_over_factory(self, monkeypatch, configured):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        self._configure_with_factory(
+            configured, lambda **kwargs: pytest.fail("factory used")
+        )
+        with patch("digest.llm.anthropic.Anthropic") as mock_cls:
+            get_anthropic_client(api_key="test-key")
+            assert mock_cls.call_args.kwargs["api_key"] == "test-key"
+
+    def test_no_factory_configured_builds_client_directly(self, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        with patch("digest.llm.anthropic.Anthropic") as mock_cls:
+            get_anthropic_client()
+            assert "api_key" not in mock_cls.call_args.kwargs
+
+    def test_classifier_accepts_a_factory_instead_of_a_key(self, monkeypatch, configured):
+        from digest.classifiers.relevance_classifier import RelevanceClassifier
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        self._configure_with_factory(
+            configured,
+            lambda **kwargs: anthropic.Anthropic(
+                api_key="minted-by-the-factory", **kwargs
+            ),
+        )
+        classifier = RelevanceClassifier(use_keyword_prefilter=False)
+        assert classifier.api_key is None
+        assert classifier.client.max_retries == DEFAULT_MAX_RETRIES
+
+    def test_classifier_still_raises_when_nothing_is_configured(self, monkeypatch):
+        from digest.classifiers.relevance_classifier import RelevanceClassifier
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        with pytest.raises(ValueError, match="Anthropic credentials required"):
+            RelevanceClassifier(use_keyword_prefilter=False)

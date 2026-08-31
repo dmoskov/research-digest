@@ -105,6 +105,19 @@ export DIGEST_DB_HOST=... DIGEST_DB_NAME=... DIGEST_DB_USER=... DIGEST_DB_PASSWO
 research-digest migrate
 ```
 
+If your deployment authenticates to Anthropic without a static key — workload
+identity federation, say, where the workload mints a short-lived token per
+exchange — leave `ANTHROPIC_API_KEY` unset and give the config a client
+factory instead. It is called with the pipeline's `timeout` and `max_retries`,
+which it must pass through so the shared retry policy still applies:
+
+```python
+CONFIG = DigestConfig(
+    ...,
+    anthropic_client_factory=my_app.clients.build_anthropic_client,
+)
+```
+
 ### 3. Tell it what to crawl
 
 ```json

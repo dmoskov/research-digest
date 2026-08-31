@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Tuple
 
 import anthropic
 
-from digest.llm import get_anthropic_client
+from digest.llm import anthropic_credentials_available, get_anthropic_client
 from digest.scoring import (
     calculate_subtopic_score,
     check_audit_keywords,
@@ -110,8 +110,13 @@ class RelevanceClassifier:
             keyword_threshold: Minimum keyword score to pass pre-filter
         """
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not self.api_key:
-            raise ValueError("Anthropic API key required. Set ANTHROPIC_API_KEY environment variable.")
+        if not anthropic_credentials_available(self.api_key):
+            raise ValueError(
+                "Anthropic credentials required. Set the ANTHROPIC_API_KEY "
+                "environment variable, or supply "
+                "DigestConfig.anthropic_client_factory if your deployment "
+                "authenticates without a static key."
+            )
 
         self.client = get_anthropic_client(api_key=self.api_key)
         self.use_keyword_prefilter = use_keyword_prefilter
@@ -702,7 +707,7 @@ def main():
         classifier = RelevanceClassifier()
     except ValueError as e:
         logger.error(f"Error: {e}")
-        print("Set ANTHROPIC_API_KEY environment variable to test the classifier.")
+        print("Set ANTHROPIC_API_KEY, or configure DigestConfig.anthropic_client_factory, to test the classifier.")
         return
 
     # Example item
