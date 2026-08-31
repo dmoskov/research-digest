@@ -21,6 +21,7 @@ import time
 
 import anthropic
 
+from digest.llm import response_text
 from digest.settings import get_config
 from digest.usage import log_usage
 
@@ -145,7 +146,7 @@ def generate_abstract(
         if not response.content:
             logger.warning("Empty API response for '%s' (stop=%s)", title, response.stop_reason)
             return None, False
-        text = response.content[0].text.strip()
+        text = response_text(response).strip()
     except Exception as exc:
         logger.warning("Abstract generation failed for '%s': %s", title, exc)
         return None, False

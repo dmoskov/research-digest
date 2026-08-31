@@ -74,3 +74,20 @@ def get_anthropic_client(
         return factory(**kwargs)
 
     return anthropic.Anthropic(**kwargs)
+
+
+def response_text(response) -> str:
+    """Return the text of the first text block in a Messages response.
+
+    Not ``content[0].text``: a model that thinks puts a ``thinking`` block
+    first, and indexing blindly reads ``.text`` off it and raises. Thinking is
+    on by default on the newest models, so the naive form is a trap waiting for
+    whichever model the deployment configures next.
+
+    Returns "" when the response carries no text block at all — callers already
+    guard the empty-content case and treat it as a failed item.
+    """
+    for block in getattr(response, "content", None) or []:
+        if getattr(block, "type", None) == "text":
+            return block.text
+    return ""

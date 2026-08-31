@@ -20,7 +20,11 @@ from typing import Dict, List, Optional, Tuple
 
 import anthropic
 
-from digest.llm import anthropic_credentials_available, get_anthropic_client
+from digest.llm import (
+    anthropic_credentials_available,
+    get_anthropic_client,
+    response_text,
+)
 from digest.scoring import (
     calculate_subtopic_score,
     check_audit_keywords,
@@ -218,8 +222,8 @@ class RelevanceClassifier:
         if not message.content:
             raise ValueError(f"Empty API response (stop={message.stop_reason})")
 
-        response_text = self._extract_json_from_response(message.content[0].text)
-        return json.loads(response_text)
+        raw = self._extract_json_from_response(response_text(message))
+        return json.loads(raw)
 
     def _map_single_llm_result(
         self,
@@ -533,8 +537,8 @@ Instructions:
             if not message.content:
                 raise ValueError(f"Empty API response (stop={message.stop_reason})")
 
-            response_text = self._extract_json_from_response(message.content[0].text)
-            llm_results = json.loads(response_text)
+            raw = self._extract_json_from_response(response_text(message))
+            llm_results = json.loads(raw)
             self._apply_batch_llm_results(llm_results, items_for_api, results)
 
         except (anthropic.AuthenticationError, anthropic.BadRequestError):

@@ -53,7 +53,7 @@ class TestGenerateAbstract:
         """Helper to create a mock Anthropic client returning given text."""
         client = MagicMock()
         msg = MagicMock()
-        msg.content = [MagicMock(text=response_text)]
+        msg.content = [MagicMock(type="text", text=response_text)]
         client.messages.create.return_value = msg
         return client
 
@@ -164,7 +164,7 @@ class TestSummarizeItems:
     def _make_client(self, response_text):
         client = MagicMock()
         msg = MagicMock()
-        msg.content = [MagicMock(text=response_text)]
+        msg.content = [MagicMock(type="text", text=response_text)]
         client.messages.create.return_value = msg
         return client
 

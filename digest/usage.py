@@ -27,13 +27,27 @@ logger = logging.getLogger("anthropic_usage")
 
 # Per-million-token (input, output) pricing. Keys are prefixes so both short
 # aliases ("claude-opus-4-6") and dated variants ("claude-sonnet-4-20250514")
-# match. Unknown models cost 0.0 — they still log tokens, so a missing entry
-# shows up as calls with zero cost rather than as missing data.
+# match, and the LONGEST matching prefix wins — "claude-opus-4" priced the
+# whole Opus 4 line at the 4.0/4.1 rate, so every claude-opus-4-6 call was
+# reported at 3x its real cost.
 MODEL_PRICING: dict[str, tuple[float, float]] = {
+    # Current generation.
+    "claude-fable-5": (10.0, 50.0),
+    "claude-opus-5": (5.0, 25.0),
+    "claude-opus-4-8": (5.0, 25.0),
+    "claude-opus-4-7": (5.0, 25.0),
+    "claude-opus-4-6": (5.0, 25.0),
+    "claude-sonnet-5": (2.0, 10.0),
+    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-haiku-4-5": (1.0, 5.0),
+    # Legacy. "claude-opus-4" is the 4.0/4.1 rate and must not be read as a
+    # default for the rest of the line — anything newer is listed above.
     "claude-opus-4": (15.0, 75.0),
     "claude-sonnet-4": (3.0, 15.0),
     "claude-haiku-4": (1.0, 5.0),
 }
+
+_unpriced_models: set = set()
 
 _override: Optional[Callable] = None
 
@@ -45,9 +59,23 @@ def set_usage_logger(fn: Optional[Callable]) -> None:
 
 
 def _get_pricing(model: str) -> tuple[float, float]:
-    for prefix, pricing in MODEL_PRICING.items():
-        if model.startswith(prefix):
-            return pricing
+    """Price one model, longest matching prefix first.
+
+    Longest-first matters: "claude-opus-4-6" also starts with "claude-opus-4",
+    and dict order alone would silently pick whichever was written first.
+
+    An unrecognised model costs 0.0 rather than guessing a rate, but says so
+    once — a table that has fallen behind the models in use is exactly how the
+    cost of a run gets misreported, and silent zeros read as free.
+    """
+    matches = [p for p in MODEL_PRICING if model.startswith(p)]
+    if matches:
+        return MODEL_PRICING[max(matches, key=len)]
+    if model not in _unpriced_models:
+        _unpriced_models.add(model)
+        logger.warning(
+            "no pricing entry for model %s — usage will be logged at cost 0.0", model
+        )
     return (0.0, 0.0)
 
 

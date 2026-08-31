@@ -12,7 +12,7 @@ from datetime import date
 from typing import Optional
 
 from digest.db import get_cursor
-from digest.llm import get_anthropic_client
+from digest.llm import get_anthropic_client, response_text
 from digest.scoring import get_subtopic_topics
 from digest.settings import get_config
 from digest.usage import log_usage
@@ -213,7 +213,7 @@ def generate_topic_summary(
         )
         log_usage(response, "digest_topic_summary")
 
-        summary = response.content[0].text.strip()
+        summary = response_text(response).strip()
         logger.info(
             "Generated summary for topic=%s: %d chars from %d items",
             topic_key,

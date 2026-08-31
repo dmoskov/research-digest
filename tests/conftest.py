@@ -107,7 +107,7 @@ def mock_anthropic_client():
 
     def make_response(text):
         msg = MagicMock()
-        msg.content = [MagicMock(text=text)]
+        msg.content = [MagicMock(type="text", text=text)]
         return msg
 
     client._make_response = make_response

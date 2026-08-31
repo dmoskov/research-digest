@@ -154,3 +154,43 @@ class TestConfiguredClientFactory:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         with pytest.raises(ValueError, match="Anthropic credentials required"):
             RelevanceClassifier(use_keyword_prefilter=False)
+
+
+class TestResponseText:
+    """The pipeline must read the first *text* block, not content[0]."""
+
+    def _response(self, *blocks):
+        from unittest.mock import MagicMock
+
+        return MagicMock(content=list(blocks))
+
+    def _block(self, type_, **kwargs):
+        from unittest.mock import MagicMock
+
+        return MagicMock(type=type_, **kwargs)
+
+    def test_reads_the_text_block(self):
+        from digest.llm import response_text
+
+        assert response_text(self._response(self._block("text", text="hi"))) == "hi"
+
+    def test_skips_a_leading_thinking_block(self):
+        """The case that breaks content[0]: thinking is on by default on the
+        newest models, and .text does not exist on a thinking block."""
+        from digest.llm import response_text
+
+        resp = self._response(
+            self._block("thinking", thinking="deliberating"),
+            self._block("text", text="the answer"),
+        )
+        assert response_text(resp) == "the answer"
+
+    def test_no_text_block_returns_empty(self):
+        from digest.llm import response_text
+
+        assert response_text(self._response(self._block("thinking", thinking="x"))) == ""
+
+    def test_empty_content_returns_empty(self):
+        from digest.llm import response_text
+
+        assert response_text(self._response()) == ""
