@@ -76,7 +76,14 @@ class TestClassifierFailLoud:
                     title="AI safety paper", content="alignment research"
                 )
 
-    def test_transient_error_still_degrades_gracefully(self):
+    def test_transient_error_leaves_the_item_unclassified(self):
+        """A transient failure must not be recorded as a judgement.
+
+        The auth error above is re-raised because retrying is pointless. A
+        transient one returns None so nothing is stored and the next run picks
+        the item up again -- previously it wrote `not relevant` for every
+        subtopic, which the classifier could never revisit.
+        """
         classifier = self._make_classifier()
         with patch.object(
             classifier.client.messages, "create", side_effect=RuntimeError("boom")
@@ -84,8 +91,7 @@ class TestClassifierFailLoud:
             result = classifier.classify_item(
                 title="AI safety paper", content="alignment research"
             )
-            assert result["subtopics"]
-            assert all(not s["relevant"] for s in result["subtopics"].values())
+            assert result is None
 
 
 class TestConfiguredClientFactory:

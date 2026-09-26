@@ -134,7 +134,7 @@ class RelevanceClassifier:
         authors: str = "",
         subtopic_filter: Optional[str] = None,
         source: str = "",
-    ) -> Dict:
+    ) -> Optional[Dict]:
         """
         Classify a single item for relevance to the configured subtopics.
 
@@ -150,6 +150,10 @@ class RelevanceClassifier:
                 - subtopics: dict of subtopic_key -> {relevant, topics, confidence, reasoning}
                 - cg_connection: dict with network connection info
                 - keyword_scores: dict of keyword scores (if prefilter enabled)
+
+            or None when the model could not be consulted at all (a refusal, a
+            response truncated mid-JSON, a network failure). Callers must not
+            store anything for a None: see the note in the except clause.
         """
         combined_text = f"{title} {content}"
         result = {
@@ -175,10 +179,20 @@ class RelevanceClassifier:
         except (anthropic.AuthenticationError, anthropic.BadRequestError):
             raise
         except Exception as e:
-            logger.error(f"Error classifying item: {e}")
-            for st in subtopics_to_check:
-                result["subtopics"][st] = self._not_relevant_entry(f"Classification error: {str(e)}")
-            return result
+            # Return None rather than a verdict. This used to write
+            # `not relevant` for every subtopic with the exception text as the
+            # reasoning, which is a fabricated judgement: the model never
+            # answered. It was also permanent -- get_unclassified_items selects
+            # items with no classification rows, so once those rows existed the
+            # item was never reconsidered, and a single refusal or a response
+            # truncated mid-JSON silently removed it from every feed for good.
+            #
+            # With None the caller stores nothing, so the item stays
+            # unclassified and the next run retries it. That is bounded: the
+            # same query only looks back `days_back`, so an item the model
+            # keeps declining ages out instead of being retried forever.
+            logger.error(f"Error classifying item, leaving it unclassified: {e}")
+            return None
 
     def _apply_single_item_prefilter(
         self,
@@ -604,6 +618,9 @@ Instructions:
             for item, classification in zip(chunk, batch_results):
                 if classification is None:
                     classification = self._classify_item_fallback(item, subtopic_filter=subtopic_filter)
+                # Still None: the fallback could not consult the model either.
+                # Carry the item through unclassified rather than attaching a
+                # verdict nothing produced.
                 item["classification"] = classification
                 classified_items.append(item)
 
@@ -613,7 +630,7 @@ Instructions:
         """Return set of topic category keys that already have relevant items."""
         populated = set()
         for item in classified_items:
-            st_cls = item.get("classification", {}).get("subtopics", {}).get(subtopic, {})
+            st_cls = (item.get("classification") or {}).get("subtopics", {}).get(subtopic, {})
             if st_cls.get("relevant", False):
                 for t in st_cls.get("topics", []):
                     populated.add(t)
@@ -666,7 +683,7 @@ Instructions:
 
         added = 0
         for item in classified_items:
-            st_cls = item.get("classification", {}).get("subtopics", {}).get(subtopic, {})
+            st_cls = (item.get("classification") or {}).get("subtopics", {}).get(subtopic, {})
             if st_cls.get("relevant", False):
                 continue
 
@@ -701,7 +718,7 @@ Instructions:
         return [
             item
             for item in items
-            if item.get("classification", {}).get("subtopics", {}).get(subtopic, {}).get("relevant", False)
+            if (item.get("classification") or {}).get("subtopics", {}).get(subtopic, {}).get("relevant", False)
         ]
 
 
