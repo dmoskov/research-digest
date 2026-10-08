@@ -4,6 +4,7 @@ Substack feed aggregator.
 Aggregates posts from Substack RSS feeds.
 """
 
+import html.entities
 import logging
 import re
 from datetime import datetime, timedelta
@@ -12,10 +13,103 @@ from typing import Dict, List, Optional
 import requests
 from bs4 import BeautifulSoup
 from defusedxml import ElementTree  # untrusted feed XML
+from lxml import etree as lxml_etree  # recovery fallback only; see _recover_feed_xml
 
 from digest.crawlers.resilient import cloudflare_get, resilient_get, rss_headers
 
 logger = logging.getLogger(__name__)
+
+
+class FeedFetchError(Exception):
+    """A feed could not be fetched or parsed at all.
+
+    Distinct from a feed that answered with nothing new. Both used to come
+    back as an empty list, so the pipeline recorded a 404 or a parse failure
+    as status "empty" and reset consecutive_failures to zero on every run: a
+    source broken for weeks looked exactly like a quiet one, and dead-feed
+    detection could never fire. fetch_items raises this so the pipeline's
+    error path records it; fetch_feed keeps its list-returning contract for
+    other callers unless asked otherwise.
+    """
+
+
+# The five entities XML itself defines. Anything else written as &name; is an
+# HTML entity that a feed author pasted in without declaring.
+_XML_ENTITIES = frozenset({"amp", "lt", "gt", "quot", "apos"})
+_NAMED_ENTITY = re.compile(r"&([A-Za-z][A-Za-z0-9]*);")
+_BARE_AMPERSAND = re.compile(r"&(?!(?:#\d+|#x[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]*);)")
+_XML_ILLEGAL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+_XML_DECLARATION = re.compile(r"^\s*<\?xml[^>]*\?>")
+_DECLARED_ENCODING = re.compile(rb"""^\s*<\?xml[^>]*encoding=["']([A-Za-z0-9._-]+)["']""")
+
+# Feed roots this parser understands. A tree whose root is anything else --
+# typically <html>, from a source configured with a web page instead of its
+# feed -- is not a feed with zero items, it is a misconfiguration, and must
+# fail loudly rather than parse into an empty list.
+_FEED_ROOTS = frozenset({"rss", "RDF", "feed"})
+
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _repair_feed_xml(content: bytes) -> str:
+    """Fix the cheap, common ways real feeds break XML.
+
+    Undeclared HTML entities (&nbsp;, &mdash;) become numeric character
+    references, bare ampersands are escaped, and control characters XML 1.0
+    forbids are dropped. Returned as text with the XML declaration removed,
+    since the declared encoding no longer describes it.
+    """
+    m = _DECLARED_ENCODING.match(content)
+    encoding = m.group(1).decode("ascii") if m else "utf-8"
+    try:
+        text = content.decode(encoding, errors="replace")
+    except LookupError:
+        text = content.decode("utf-8", errors="replace")
+    text = _XML_DECLARATION.sub("", text, count=1)
+
+    def _entity(match: "re.Match") -> str:
+        name = match.group(1)
+        if name in _XML_ENTITIES:
+            return match.group(0)
+        codepoint = html.entities.name2codepoint.get(name)
+        return f"&#{codepoint};" if codepoint else f"&amp;{name};"
+
+    text = _NAMED_ENTITY.sub(_entity, text)
+    text = _BARE_AMPERSAND.sub("&amp;", text)
+    return _XML_ILLEGAL_CHARS.sub("", text)
+
+
+def _recover_feed_xml(text: str) -> Optional[bytes]:
+    """Last-resort structural recovery, returning well-formed XML or None.
+
+    For feeds broken beyond entity fixes: raw HTML such as <br> inside an
+    element, or an unrendered template tag in the output. lxml in recover mode
+    rebuilds a tree around the damage. It is hardened the usual way -- no
+    entity resolution, no network, no DTD, no huge trees -- and its output is
+    only ever serialised back to bytes for defusedxml to parse again, so
+    defusedxml stays the parser of record and every caller still receives
+    stdlib Elements.
+
+    Returns None unless the recovered root is a feed. lxml will happily build a
+    tree out of an HTML page, and accepting that would turn a misconfigured
+    source back into an apparently empty one.
+    """
+    parser = lxml_etree.XMLParser(
+        recover=True,
+        resolve_entities=False,
+        no_network=True,
+        load_dtd=False,
+        huge_tree=False,
+    )
+    try:
+        root = lxml_etree.fromstring(text.encode("utf-8"), parser=parser)
+    except lxml_etree.XMLSyntaxError:
+        return None
+    if root is None or _local_name(root.tag) not in _FEED_ROOTS:
+        return None
+    return lxml_etree.tostring(root)
 
 
 class SubstackAggregator:
@@ -26,17 +120,33 @@ class SubstackAggregator:
         self.session = requests.Session()
         self.session.headers.update(rss_headers())
 
-    def fetch_feed(self, feed_url: str, days_back: Optional[int] = 7) -> List[Dict]:
+    def fetch_feed(
+        self,
+        feed_url: str,
+        days_back: Optional[int] = 7,
+        raise_on_error: bool = False,
+    ) -> List[Dict]:
         """
         Fetch posts from a Substack RSS feed.
 
         Args:
             feed_url: URL of the RSS feed
             days_back: Only fetch posts from last N days (None for all)
+            raise_on_error: Raise FeedFetchError when the feed cannot be
+                fetched or parsed, instead of returning an empty list. The
+                per-source path sets this so a broken feed is recorded as an
+                error; see FeedFetchError.
 
         Returns:
             List of post dictionaries
         """
+
+        def _fail(message: str, cause: Exception) -> List[Dict]:
+            logger.error(message)
+            if raise_on_error:
+                raise FeedFetchError(message) from cause
+            return []
+
         posts = []
 
         cutoff_date = None
@@ -65,22 +175,20 @@ class SubstackAggregator:
                             cf_resp.content, feed_url, cutoff_date
                         )
                     except ElementTree.ParseError as ex:
-                        logger.error(
-                            f"Error parsing XML from {feed_url} (curl_cffi): {ex}"
+                        return _fail(
+                            f"Error parsing XML from {feed_url} (curl_cffi): {ex}", ex
                         )
                 else:
-                    logger.error(
-                        f"Error fetching feed {feed_url}: Cloudflare block (403)"
+                    return _fail(
+                        f"Error fetching feed {feed_url}: Cloudflare block (403)", e
                     )
             else:
-                logger.error(f"Error fetching feed {feed_url}: {e}")
+                return _fail(f"Error fetching feed {feed_url}: {e}", e)
             return posts
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error fetching feed {feed_url}: {e}")
-            return []
+            return _fail(f"Error fetching feed {feed_url}: {e}", e)
         except ElementTree.ParseError as e:
-            logger.error(f"Error parsing XML from {feed_url}: {e}")
-            return []
+            return _fail(f"Error parsing XML from {feed_url}: {e}", e)
 
         return posts
 
@@ -95,7 +203,7 @@ class SubstackAggregator:
         Raises:
             ElementTree.ParseError: If the XML cannot be parsed.
         """
-        root = ElementTree.fromstring(content.lstrip())
+        root = self._parse_tolerant(content, feed_url)
 
         # Find items: try standard RSS 2.0, then RSS 1.0/RDF namespace,
         # then Atom entries.
@@ -132,6 +240,38 @@ class SubstackAggregator:
                 continue
 
         return posts
+
+    @staticmethod
+    def _parse_tolerant(content: bytes, feed_url: str):
+        """Parse feed XML, repairing the common breakages before giving up.
+
+        Tries the bytes as-is, then with entities and ampersands repaired,
+        then with structural recovery. A repaired or recovered parse logs a
+        warning, so the publisher's broken output stays visible without being
+        treated as a crawl failure. If nothing produces a feed, the original
+        ParseError is raised -- including for a well-formed document whose
+        root is not a feed, such as an HTML page configured as a feed URL.
+        """
+        try:
+            root = ElementTree.fromstring(content.lstrip())
+        except ElementTree.ParseError as original:
+            repaired = _repair_feed_xml(content)
+            try:
+                root = ElementTree.fromstring(repaired.lstrip())
+                how = "repaired entities in"
+            except ElementTree.ParseError:
+                recovered = _recover_feed_xml(repaired)
+                if recovered is None:
+                    raise original from None
+                root = ElementTree.fromstring(recovered)
+                how = "recovered structurally broken"
+            logger.warning("%s: %s feed XML (%s)", feed_url, how, original)
+
+        if _local_name(root.tag) not in _FEED_ROOTS:
+            raise ElementTree.ParseError(
+                f"not an RSS or Atom feed: document root is <{_local_name(root.tag)}>"
+            )
+        return root
 
     def _parse_feed_item(self, item, feed_url: str) -> Optional[Dict]:
         """Parse a single RSS feed item."""
@@ -492,7 +632,11 @@ class SubstackAggregator:
             logger.warning(f"No feed_url for source {source_config.get('key')}")
             return []
 
-        items = self.fetch_feed(feed_url, days_back=days_back)
+        # Raise rather than return [] on failure: this is the per-source path,
+        # and the pipeline records an exception as status "error" with a
+        # climbing consecutive_failures count. An empty list would be recorded
+        # as "empty" and reset that count -- see FeedFetchError.
+        items = self.fetch_feed(feed_url, days_back=days_back, raise_on_error=True)
 
         # Override source fields so items.source matches sources.key
         source_key = source_config.get("key", "substack")
