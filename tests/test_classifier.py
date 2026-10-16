@@ -2,7 +2,7 @@
 
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -116,7 +116,7 @@ class TestClassifyItem:
         if "abundance" in result["subtopics"]:
             assert result["subtopics"]["abundance"]["relevant"] is True
 
-    def test_classify_item_api_failure_returns_conservative(self, mock_anthropic_client):
+    def test_classify_item_api_failure_returns_none(self, mock_anthropic_client):
         from digest.classifiers.relevance_classifier import RelevanceClassifier
 
         mock_anthropic_client.messages.create.side_effect = Exception("API error")
@@ -131,10 +131,58 @@ class TestClassifyItem:
                 content="This paper studies the effect of upzoning on housing construction.",
             )
 
-        assert "subtopics" in result
-        # On error, all should be marked not relevant
-        for st_data in result["subtopics"].values():
-            assert st_data["relevant"] is False
+        # None, not a fabricated verdict. Writing `not relevant` here used to
+        # be permanent: get_unclassified_items only selects items with no
+        # classification rows, so one transient failure removed the item from
+        # every feed for good. None leaves it unclassified and retryable.
+        assert result is None
+
+    def test_refusal_leaves_the_item_unclassified(self, mock_anthropic_client):
+        """A stop_reason of refusal must not become a `not relevant` verdict.
+
+        Observed in production 2026-09-25: 266 rows were written this way
+        during a reclassification run, silently dropping 124 previously
+        relevant items.
+        """
+        from digest.classifiers.relevance_classifier import RelevanceClassifier
+
+        refusal = MagicMock()
+        refusal.content = []
+        refusal.stop_reason = "refusal"
+        mock_anthropic_client.messages.create.return_value = refusal
+
+        with patch(
+            "digest.classifiers.relevance_classifier.get_anthropic_client",
+            return_value=mock_anthropic_client,
+        ):
+            classifier = RelevanceClassifier(api_key="test-key")
+            result = classifier.classify_item(
+                title="Housing Supply and Zoning Reform",
+                content="This paper studies the effect of upzoning on housing construction.",
+            )
+
+        assert result is None
+
+    def test_filter_relevant_tolerates_an_unclassified_item(self):
+        """classify_batch may now carry a None classification through."""
+        from digest.classifiers.relevance_classifier import RelevanceClassifier
+
+        with patch(
+            "digest.classifiers.relevance_classifier.anthropic_credentials_available",
+            return_value=True,
+        ), patch("digest.classifiers.relevance_classifier.get_anthropic_client"):
+            classifier = RelevanceClassifier(api_key="test-key")
+
+        items = [
+            {"title": "a", "classification": None},
+            {
+                "title": "b",
+                "classification": {
+                    "subtopics": {"abundance": {"relevant": True}}
+                },
+            },
+        ]
+        assert classifier.filter_relevant(items, "abundance") == [items[1]]
 
 
 class TestPromptCaching:
