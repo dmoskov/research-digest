@@ -28,6 +28,11 @@ dependencies = [
     "requests==2.32.4",
     "beautifulsoup4==4.14.3",
     "defusedxml==0.7.1",
+    # Recovery fallback only, for feeds broken past simple entity repair (raw
+    # HTML inside elements, unrendered template tags). Hardened -- no entity
+    # resolution, no network, no DTD -- and its output is re-parsed by
+    # defusedxml, which stays the parser of record. See _recover_feed_xml.
+    "lxml==6.0.2",
     # 1.x, not 0.75: workload identity federation
     # (anthropic.WorkloadIdentityCredentials, used via
     # DigestConfig.anthropic_client_factory) does not exist before 1.0, so a
