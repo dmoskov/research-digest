@@ -111,6 +111,20 @@ class TestGenerateAbstract:
         assert result is None
         assert was_refused is False
 
+    def test_refusal_stop_reason_is_reported_as_refused(self):
+        """A classifier decline carries no text at all, so the "I cannot"
+        prefix check never sees it. Reporting it as refused is what sends the
+        item down the extractive and Gemini fallbacks."""
+        client = MagicMock()
+        msg = MagicMock()
+        msg.content = []
+        msg.stop_reason = "refusal"
+        msg.stop_details = MagicMock(category="bio")
+        client.messages.create.return_value = msg
+        result, was_refused = generate_abstract("Title", "x" * 100, "source", client, delay=0)
+        assert result is None
+        assert was_refused is True
+
     def test_returns_none_on_refusal_i_cannot(self):
         client = self._make_client("I cannot summarize this content")
         result, was_refused = generate_abstract("Title", "x" * 100, "source", client, delay=0)

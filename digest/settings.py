@@ -30,6 +30,8 @@ DEFAULT_CLAUDE_MODEL = "claude-opus-4-6"
 DEFAULT_CLAUDE_MODEL_FAST = "claude-opus-4-6"
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
 
 @dataclass(frozen=True)
 class DigestConfig:
@@ -85,6 +87,13 @@ class DigestConfig:
         claude_model / claude_model_fast: Model IDs for summarisation and for
             classification respectively. Classification runs on every item, so
             ``claude_model_fast`` dominates cost.
+        claude_effort: Optional ``output_config.effort`` sent with every Claude
+            call: "low", "medium", "high", "xhigh" or "max". On the models that
+            always think (Claude Opus 5.5, Claude Sonnet 5.5) it is the only
+            control over how much they do, and so over latency and cost;
+            "low" suits classification and short summaries. Unset, the field
+            is not sent and the model's own default applies — which is also
+            the only setting accepted by older models that reject the field.
         gemini_model: Optional non-Anthropic fallback for abstracts Claude
             declines to summarise. Requires the ``gemini`` extra.
         anthropic_client_factory: Optional callable returning a configured
@@ -113,6 +122,7 @@ class DigestConfig:
     bot_contact: str = ""
     claude_model: str = DEFAULT_CLAUDE_MODEL
     claude_model_fast: str = DEFAULT_CLAUDE_MODEL_FAST
+    claude_effort: Optional[str] = None
     gemini_model: Optional[str] = DEFAULT_GEMINI_MODEL
     anthropic_client_factory: Optional[Callable[..., "anthropic.Anthropic"]] = None
 
@@ -123,6 +133,11 @@ class DigestConfig:
             raise ValueError(
                 "DigestConfig.subtopics is empty — the pipeline would classify "
                 "every item as irrelevant and produce an empty digest"
+            )
+        if self.claude_effort is not None and self.claude_effort not in EFFORT_LEVELS:
+            raise ValueError(
+                f"DigestConfig.claude_effort is {self.claude_effort!r}; "
+                f"expected one of {EFFORT_LEVELS} or None"
             )
         missing = [k for k in self.subtopics if k not in self.subtopic_topics]
         if missing:

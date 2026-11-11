@@ -200,3 +200,48 @@ class TestResponseText:
         from digest.llm import response_text
 
         assert response_text(self._response()) == ""
+
+
+class TestRefusalCategory:
+    """A classifier decline is an HTTP 200 whose stop_reason is "refusal"."""
+
+    def _response(self, **kwargs):
+        from unittest.mock import MagicMock
+
+        return MagicMock(**kwargs)
+
+    def test_an_ordinary_response_is_not_a_refusal(self):
+        from digest.llm import refusal_category
+
+        assert refusal_category(self._response(stop_reason="end_turn")) is None
+
+    def test_reports_the_classifier_category(self):
+        from unittest.mock import MagicMock
+
+        from digest.llm import refusal_category
+
+        resp = self._response(stop_reason="refusal", stop_details=MagicMock(category="bio"))
+        assert refusal_category(resp) == "bio"
+
+    def test_a_refusal_without_details_is_still_a_refusal(self):
+        from digest.llm import refusal_category
+
+        resp = self._response(stop_reason="refusal", stop_details=None)
+        assert refusal_category(resp) == "unspecified"
+
+
+class TestEffortParams:
+    def test_nothing_is_sent_when_no_effort_is_configured(self):
+        """Older models reject output_config.effort, so unset must mean absent."""
+        from digest.llm import effort_params
+
+        assert effort_params() == {}
+
+    def test_configured_effort_becomes_output_config(self, configured):
+        from dataclasses import replace
+
+        from digest.llm import effort_params
+        from digest.settings import configure
+
+        configure(replace(configured, claude_effort="low"))
+        assert effort_params() == {"output_config": {"effort": "low"}}

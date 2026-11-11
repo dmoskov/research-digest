@@ -171,3 +171,14 @@ class TestCrawlerIdentity:
                 f"{leaked} is a module constant again — the crawler identity must "
                 "come from DigestConfig so it cannot be inherited by another deployment"
             )
+
+
+class TestClaudeEffort:
+    def test_unset_by_default(self, configured):
+        assert configured.claude_effort is None
+
+    def test_an_unknown_level_is_rejected_at_configure_time(self, configured):
+        from dataclasses import replace
+
+        with pytest.raises(ValueError, match="claude_effort"):
+            replace(configured, claude_effort="extreme")

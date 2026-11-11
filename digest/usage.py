@@ -32,13 +32,17 @@ logger = logging.getLogger("anthropic_usage")
 # reported at 3x its real cost.
 MODEL_PRICING: dict[str, tuple[float, float]] = {
     # Current generation.
+    "claude-fable-5-2": (8.0, 40.0),
     "claude-fable-5": (10.0, 50.0),
+    "claude-opus-5-5": (4.0, 20.0),
     "claude-opus-5": (5.0, 25.0),
     "claude-opus-4-8": (5.0, 25.0),
     "claude-opus-4-7": (5.0, 25.0),
     "claude-opus-4-6": (5.0, 25.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
     "claude-sonnet-5": (2.0, 10.0),
     "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-haiku-5-5": (0.10, 0.50),
     "claude-haiku-4-5": (1.0, 5.0),
     # Legacy. "claude-opus-4" is the 4.0/4.1 rate and must not be read as a
     # default for the rest of the line — anything newer is listed above.
