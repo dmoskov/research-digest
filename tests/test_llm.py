@@ -245,3 +245,82 @@ class TestEffortParams:
 
         configure(replace(configured, claude_effort="low"))
         assert effort_params() == {"output_config": {"effort": "low"}}
+class TestGeminiGenerate:
+    """The non-Anthropic fallback for content Claude declines."""
+
+    def _install_fake_genai(self, monkeypatch, generate):
+        """Stand in for the optional google-genai package."""
+        import sys
+        import types
+        from unittest.mock import MagicMock
+
+        client = MagicMock()
+        client.models.generate_content.side_effect = generate
+        genai = types.ModuleType("google.genai")
+        genai.Client = MagicMock(return_value=client)
+        google = types.ModuleType("google")
+        google.genai = genai
+        monkeypatch.setitem(sys.modules, "google", google)
+        monkeypatch.setitem(sys.modules, "google.genai", genai)
+        return genai, client
+
+    def test_returns_the_text_and_passes_the_system_prompt(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from digest.llm import gemini_generate
+
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        genai, client = self._install_fake_genai(monkeypatch, lambda **kwargs: MagicMock(text="an answer"))
+
+        assert gemini_generate("the prompt", system="the taxonomy") == "an answer"
+        genai.Client.assert_called_once_with(api_key="test-key")
+        client.models.generate_content.assert_called_once_with(
+            model="gemini-3.5-flash",
+            contents="the prompt",
+            config={"system_instruction": "the taxonomy"},
+        )
+
+    def test_no_api_key_means_no_fallback(self, monkeypatch):
+        from digest.llm import gemini_generate
+
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        genai, _ = self._install_fake_genai(monkeypatch, lambda **kwargs: pytest.fail("called without a key"))
+
+        assert gemini_generate("the prompt") is None
+        genai.Client.assert_not_called()
+
+    def test_no_model_configured_means_no_fallback(self, monkeypatch, configured):
+        from dataclasses import replace
+
+        from digest.llm import gemini_generate
+        from digest.settings import configure
+
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        genai, _ = self._install_fake_genai(monkeypatch, lambda **kwargs: pytest.fail("called without a model"))
+        configure(replace(configured, gemini_model=None))
+
+        assert gemini_generate("the prompt") is None
+        genai.Client.assert_not_called()
+
+    def test_api_failure_returns_none(self, monkeypatch):
+        from digest.llm import gemini_generate
+
+        def boom(**kwargs):
+            raise RuntimeError("quota exceeded")
+
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        self._install_fake_genai(monkeypatch, boom)
+
+        assert gemini_generate("the prompt") is None
+
+    def test_blocked_answer_returns_none(self, monkeypatch):
+        """Gemini reports its own block as a response with no text."""
+        from unittest.mock import MagicMock
+
+        from digest.llm import gemini_generate
+
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        self._install_fake_genai(monkeypatch, lambda **kwargs: MagicMock(text=None))
+
+        assert gemini_generate("the prompt") is None

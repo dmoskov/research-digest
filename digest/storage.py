@@ -442,6 +442,9 @@ def store_classifications(item_id: int, classification: dict, source_key: str = 
         classification: The full item["classification"] dict containing:
             - subtopics: dict of subtopic_key -> {relevant, topics, confidence, reasoning}
             - cg_connection: {has_connection, connection_name, connection_description}
+            - fallback_model: set when the primary model declined the item and
+              the fallback produced the verdict; recorded on the item as a
+              'classification' refusal.
 
     Raises:
         ValueError: If item_id is not a positive integer.
@@ -537,6 +540,25 @@ def store_classifications(item_id: int, classification: dict, source_key: str = 
                 cur.execute(
                     """
                     DELETE FROM cg_connections WHERE item_id = %s
+                    """,
+                    (item_id,),
+                )
+
+            # The primary model declined this item and the fallback model
+            # produced the verdict above. Marked on the item, in the columns
+            # that already track abstract refusals, so those verdicts can be
+            # found and re-judged later.
+            if classification.get("fallback_model"):
+                cur.execute(
+                    """
+                    UPDATE items SET
+                        api_refused_at = COALESCE(api_refused_at, NOW()),
+                        api_refusal_type = CASE
+                            WHEN api_refusal_type IS NULL THEN 'classification'
+                            WHEN api_refusal_type IN ('classification', 'both') THEN api_refusal_type
+                            ELSE 'both'
+                        END
+                    WHERE id = %s
                     """,
                     (item_id,),
                 )

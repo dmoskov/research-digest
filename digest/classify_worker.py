@@ -182,15 +182,19 @@ async def run_parallel_classification(
 
     # Count results
     classified = 0
+    by_fallback = 0
     errors = 0
     for r in results:
         if isinstance(r, Exception):
             errors += 1
         elif isinstance(r, list):
             classified += sum(1 for x in r if x is not None)
+            by_fallback += sum(1 for x in r if x is not None and x.get("fallback_model"))
 
     logger.info("\nClassification complete:")
     logger.info(f"  Items: {classified}/{len(items)} classified")
+    if by_fallback:
+        logger.info(f"  Fallback: {by_fallback} declined by the primary model, classified by the fallback")
     logger.info(f"  Errors: {errors} batch failures")
     logger.info(f"  Time: {elapsed:.1f}s ({len(items) / max(elapsed, 1):.1f} items/sec)")
 

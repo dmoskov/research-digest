@@ -13,9 +13,13 @@ exchange — supplies ``DigestConfig.anthropic_client_factory`` instead, and
 every call site here routes through it.
 """
 
+import logging
+import os
 from typing import Callable, Optional
 
 import anthropic
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 DEFAULT_MAX_RETRIES = 3
@@ -117,3 +121,68 @@ def refusal_category(response) -> Optional[str]:
         return None
     category = getattr(getattr(response, "stop_details", None), "category", None)
     return category if isinstance(category, str) and category else "unspecified"
+
+
+# ---------------------------------------------------------------------------
+# Non-Anthropic fallback
+# ---------------------------------------------------------------------------
+
+
+def gemini_generate(prompt: str, system: Optional[str] = None) -> Optional[str]:
+    """Send one prompt to the configured Gemini model and return its text.
+
+    This is the fallback for content Claude declines: a model from another
+    vendor has a different content policy, so an item one refuses the other
+    will usually read. It is used for abstracts (``digest.summarizer``) and
+    for classification (``digest.classifiers``).
+
+    Returns None when there is no fallback to use — ``gemini_model`` unset, no
+    ``GEMINI_API_KEY`` / ``GOOGLE_API_KEY``, or the ``gemini`` extra not
+    installed — and when Gemini answers with nothing, which is how it reports
+    a block of its own. An API failure is logged and also returns None: the
+    caller is already on its second attempt and has nowhere further to go, so
+    it treats every None the same way and leaves the item for the next run.
+    """
+    from digest.settings import get_config
+
+    model = get_config().gemini_model
+    if not model:
+        logger.debug("No gemini_model configured, no fallback available")
+        return None
+
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        logger.debug("No GEMINI_API_KEY set, no fallback available")
+        return None
+
+    try:
+        from google import genai
+    except ImportError:
+        logger.debug("google-genai not installed, no fallback available")
+        return None
+
+    try:
+        # Bound to a name on purpose: the SDK closes the HTTP client when the
+        # Client object is collected, so `genai.Client(...).models.generate_content(...)`
+        # fails mid-request with "client has been closed".
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config={"system_instruction": system} if system else None,
+        )
+        text = response.text
+    except Exception as exc:
+        logger.warning("Gemini fallback (%s) failed: %s", model, exc)
+        return None
+
+    if not text or not text.strip():
+        feedback = getattr(response, "prompt_feedback", None)
+        logger.warning(
+            "Gemini fallback (%s) returned no text (block_reason=%s)",
+            model,
+            getattr(feedback, "block_reason", None),
+        )
+        return None
+
+    return text

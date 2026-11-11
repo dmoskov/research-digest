@@ -23,6 +23,7 @@ import anthropic
 from digest.llm import (
     anthropic_credentials_available,
     effort_params,
+    gemini_generate,
     get_anthropic_client,
     refusal_category,
     response_text,
@@ -40,6 +41,18 @@ from digest.settings import get_config, register_cache_clear
 from digest.usage import log_usage
 
 logger = logging.getLogger(__name__)
+
+
+class ModelRefusal(ValueError):
+    """The classification model declined to answer (``stop_reason == "refusal"``).
+
+    Kept apart from other failures because it is not transient: the same model
+    declines the same item on every retry. In production this is the model's
+    safety filter on dual-use subject matter — papers about dangerous pathogens
+    or software exploits — which is the reading a team following that subject
+    subscribes for. So a refusal is routed to the fallback model rather than
+    retried.
+    """
 
 
 @functools.lru_cache(maxsize=1)
@@ -95,7 +108,7 @@ def _require_complete(message) -> None:
     """Raise unless the model answered in full."""
     refused = refusal_category(message)
     if refused:
-        raise ValueError(f"Model declined to classify (refusal: {refused})")
+        raise ModelRefusal(f"Model declined to classify (refusal: {refused})")
     if not message.content:
         raise ValueError(f"Empty API response (stop={message.stop_reason})")
     if message.stop_reason == "max_tokens":
@@ -171,9 +184,13 @@ class RelevanceClassifier:
                 - cg_connection: dict with network connection info
                 - keyword_scores: dict of keyword scores (if prefilter enabled)
 
-            or None when the model could not be consulted at all (a refusal, a
-            response truncated mid-JSON, a network failure). Callers must not
-            store anything for a None: see the note in the except clause.
+            plus ``fallback_model`` when the primary model declined the item
+            and the fallback model produced the verdict instead,
+
+            or None when no model could be consulted at all (a refusal with no
+            working fallback, a response truncated mid-JSON, a network
+            failure). Callers must not store anything for a None: see the note
+            in the except clause.
         """
         combined_text = f"{title} {content}"
         result = {
@@ -192,7 +209,13 @@ class RelevanceClassifier:
         prompt = self._build_classification_prompt(title, content, item_type, subtopics_to_check, source=source)
 
         try:
-            llm_result = self._call_llm_classify(prompt)
+            try:
+                llm_result = self._call_llm_classify(prompt)
+            except ModelRefusal as refusal:
+                llm_result = self._call_fallback_classify(prompt, title, refusal)
+                # Recorded with the verdict, so which items the primary model
+                # never judged stays answerable from the database.
+                result["fallback_model"] = get_config().gemini_model
             self._map_single_llm_result(llm_result, subtopics_to_check, result)
             self._fill_unevaluated_subtopics(result)
             return result
@@ -209,8 +232,10 @@ class RelevanceClassifier:
             #
             # With None the caller stores nothing, so the item stays
             # unclassified and the next run retries it. That is bounded: the
-            # same query only looks back `days_back`, so an item the model
-            # keeps declining ages out instead of being retried forever.
+            # same query only looks back `days_back`, so an item that keeps
+            # failing ages out instead of being retried forever. A refusal
+            # reaches here only when the fallback model was unavailable or
+            # failed too; see _call_fallback_classify.
             logger.error(f"Error classifying item, leaving it unclassified: {e}")
             return None
 
@@ -257,6 +282,21 @@ class RelevanceClassifier:
 
         raw = self._extract_json_from_response(response_text(message))
         return json.loads(raw)
+
+    def _call_fallback_classify(self, prompt: str, title: str, refusal: ModelRefusal) -> Dict:
+        """Classify an item the primary model declined, using the fallback model.
+
+        Sends the same system prompt and the same per-item prompt, so the
+        fallback judges against the same taxonomy and scope rules. Re-raises
+        the refusal when there is no fallback to use or it produced nothing;
+        the caller then leaves the item unclassified, as before.
+        """
+        text = gemini_generate(prompt, system=_build_cached_system_prompt())
+        if text is None:
+            raise refusal
+        llm_result = json.loads(self._extract_json_from_response(text))
+        logger.info("%s: '%s' classified by fallback %s", refusal, title[:80], get_config().gemini_model)
+        return llm_result
 
     def _map_single_llm_result(
         self,
@@ -568,6 +608,9 @@ Instructions:
             )
             log_usage(message, "digest_relevance_batch")
             _log_cache_usage(message, "digest_relevance_batch")
+            # One declined item refuses the whole batch. The per-item path
+            # below retries each alone, so only the items the model still
+            # declines are sent to the fallback.
             _require_complete(message)
 
             raw = self._extract_json_from_response(response_text(message))

@@ -21,7 +21,7 @@ import time
 
 import anthropic
 
-from digest.llm import effort_params, refusal_category, response_text
+from digest.llm import effort_params, gemini_generate, refusal_category, response_text
 from digest.settings import get_config
 from digest.usage import log_usage
 
@@ -189,22 +189,6 @@ def generate_abstract_gemini(
 
     Returns the bullet-point string, or None if generation failed.
     """
-    gemini_model = get_config().gemini_model
-    if not gemini_model:
-        logger.debug("No gemini_model configured, skipping Gemini fallback")
-        return None
-
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        logger.debug("No GEMINI_API_KEY set, skipping Gemini fallback")
-        return None
-
-    try:
-        from google import genai
-    except ImportError:
-        logger.debug("google-genai not installed, skipping Gemini fallback")
-        return None
-
     if not content or len(content.strip()) < 50:
         return None
 
@@ -221,16 +205,10 @@ def generate_abstract_gemini(
         f"Content:\n{truncated}"
     )
 
-    try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=gemini_model,
-            contents=prompt,
-        )
-        text = response.text.strip()
-    except Exception as exc:
-        logger.warning("Gemini abstract failed for '%s': %s", title, exc)
+    text = gemini_generate(prompt)
+    if text is None:
         return None
+    text = text.strip()
 
     if delay > 0:
         time.sleep(delay)

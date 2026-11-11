@@ -18,7 +18,7 @@ deduplication, the storage layer and the schema.
 | Crawlers | `digest.crawlers` | 7 crawler types: RSS, CrossRef, OpenAlex, arXiv Atom, NBER, OSF preprints, generic HTML scraper — with retry, backoff and Cloudflare handling |
 | Enrichment | `digest.enrichment` | Fetches full text for items whose feed gave only a stub |
 | Summarisation | `digest.summarizer` | Generates card-preview abstracts; falls back to extractive, then to Gemini for content Claude declines |
-| Classification | `digest.classifiers` | Keyword prefilter → batched LLM classification against every subtopic at once, with prompt caching |
+| Classification | `digest.classifiers` | Keyword prefilter → batched LLM classification against every subtopic at once, with prompt caching; items Claude declines go to Gemini |
 | Storage | `digest.storage` | Upserts items, classifications, topics; cross-source dedup by content hash |
 | Feeds | `digest.topic_summarizer` | Cached per-topic LLM summaries with deep links |
 | Schema | `digest.schema` | 10 tables + 13 indexes, applied by `research-digest migrate` |
@@ -42,7 +42,7 @@ is unclassified, so it can fail, be fixed and be re-run without re-crawling.
 pip install 'research-digest @ git+https://github.com/dmoskov/research-digest@v0.1.1'
 ```
 
-Extras: `[gemini]` for the non-Anthropic abstract fallback, `[aws]` to read
+Extras: `[gemini]` for the non-Anthropic fallback on declined items, `[aws]` to read
 database credentials from Secrets Manager, `[dev]` for the test tooling.
 
 ### 1. Describe your subject matter
@@ -181,7 +181,7 @@ Required: `org_name`, `subtopics`, `subtopic_topics`. Everything else is optiona
 | `claude_model` | Summarisation model |
 | `claude_model_fast` | Classification model — runs on every item, so this dominates cost |
 | `claude_effort` | Optional `output_config.effort` for every Claude call (`low` … `max`). On models that always think (Claude Opus 5.5, Claude Sonnet 5.5) it is the only control over thinking, latency and cost; `low` suits this workload. Unset, the field is not sent — required for older models that reject it |
-| `gemini_model` | Optional fallback for abstracts Claude declines. Needs the `gemini` extra |
+| `gemini_model` | Optional fallback for items Claude declines to summarise or classify. Needs the `gemini` extra and `GEMINI_API_KEY`. `None` disables it |
 
 Misconfiguration raises at `configure()` time — empty taxonomy, a subtopic with
 no topics, a topic set with no subtopic, a subtopic missing `team_context`. The
