@@ -94,8 +94,11 @@ class DigestConfig:
             "low" suits classification and short summaries. Unset, the field
             is not sent and the model's own default applies — which is also
             the only setting accepted by older models that reject the field.
-        gemini_model: Optional non-Anthropic fallback for abstracts Claude
-            declines to summarise. Requires the ``gemini`` extra.
+        gemini_model: Optional non-Anthropic fallback for items Claude
+            declines, both to summarise and to classify. Requires the
+            ``gemini`` extra and ``GEMINI_API_KEY``. Set it to None to keep
+            every item with a single vendor; a declined item then goes
+            unclassified.
         anthropic_client_factory: Optional callable returning a configured
             ``anthropic.Anthropic``. Set it when the deployment's credential is
             not a static API key — e.g. workload identity federation, where the

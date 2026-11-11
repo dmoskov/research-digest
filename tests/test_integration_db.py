@@ -163,6 +163,39 @@ class TestStorageRoundTrip:
         assert mine[0]["classifications"]["abundance"]["topics"] == ["housing"]
         assert mine[0]["cg_connection"]["connection_name"] == "Jane Quimby"
 
+    def test_fallback_verdict_marks_the_item_as_refused(self, clean_items):
+        """A verdict from the fallback model is traceable from the item."""
+        from digest.db import get_cursor
+        from digest.storage import store_classifications, store_item
+
+        verdict = {
+            "subtopics": {
+                "abundance": {"relevant": True, "topics": ["housing"], "confidence": "high", "reasoning": "r"}
+            },
+            "cg_connection": {"has_connection": False},
+        }
+        plain, declined, declined_twice = _item(), _item(), _item(_abstract_refused=True)
+        ids = []
+        for item in (plain, declined, declined_twice):
+            store_item(item)
+            with get_cursor() as cur:
+                cur.execute("SELECT id FROM items WHERE url = %s", (item["url"],))
+                ids.append(cur.fetchone()["id"])
+
+        store_classifications(ids[0], dict(verdict))
+        store_classifications(ids[1], dict(verdict, fallback_model="gemini-3.5-flash"))
+        store_classifications(ids[2], dict(verdict, fallback_model="gemini-3.5-flash"))
+
+        with get_cursor() as cur:
+            cur.execute(
+                "SELECT id, api_refused_at IS NOT NULL AS refused, api_refusal_type FROM items WHERE id = ANY(%s)",
+                (ids,),
+            )
+            rows = {r["id"]: r for r in cur.fetchall()}
+        assert (rows[ids[0]]["refused"], rows[ids[0]]["api_refusal_type"]) == (False, None)
+        assert (rows[ids[1]]["refused"], rows[ids[1]]["api_refusal_type"]) == (True, "classification")
+        assert (rows[ids[2]]["refused"], rows[ids[2]]["api_refusal_type"]) == (True, "both")
+
     def test_feed_filter_excludes_other_subtopics(self, clean_items):
         from digest.db import get_cursor
         from digest.storage import get_items_for_feed, store_classifications, store_item

@@ -92,6 +92,20 @@ class TestGetAllKeywordCandidates:
         assert len(candidates) == 0
 
 
+def _refusal():
+    """What the API returns when the model declines: no content, stop=refusal."""
+    refusal = MagicMock()
+    refusal.content = []
+    refusal.stop_reason = "refusal"
+    return refusal
+
+
+_HOUSING_VERDICT = (
+    '{"abundance": {"relevant": true, "topics": ["housing"], '
+    '"confidence": "high", "reasoning": "from the fallback"}}'
+)
+
+
 class TestClassifyItem:
     """Tests for classify_item with mocked API."""
 
@@ -163,18 +177,19 @@ class TestClassifyItem:
 
         Observed in production 2026-09-25: 266 rows were written this way
         during a reclassification run, silently dropping 124 previously
-        relevant items.
+        relevant items. With no fallback model to ask, the item stays
+        unclassified.
         """
         from digest.classifiers.relevance_classifier import RelevanceClassifier
 
-        refusal = MagicMock()
-        refusal.content = []
-        refusal.stop_reason = "refusal"
-        mock_anthropic_client.messages.create.return_value = refusal
+        mock_anthropic_client.messages.create.return_value = _refusal()
 
         with patch(
             "digest.classifiers.relevance_classifier.get_anthropic_client",
             return_value=mock_anthropic_client,
+        ), patch(
+            "digest.classifiers.relevance_classifier.gemini_generate",
+            return_value=None,
         ):
             classifier = RelevanceClassifier(api_key="test-key")
             result = classifier.classify_item(
@@ -204,6 +219,115 @@ class TestClassifyItem:
             },
         ]
         assert classifier.filter_relevant(items, "abundance") == [items[1]]
+
+
+class TestRefusalFallback:
+    """An item the primary model declines is classified by the fallback model.
+
+    Observed in production 2026-11: the classifier declined about three items
+    a day, almost all papers on dangerous pathogens or software exploits. With
+    nowhere else to go they aged out unclassified, so the teams that follow
+    exactly that subject matter never saw them.
+    """
+
+    def _classifier(self, client):
+        from digest.classifiers.relevance_classifier import RelevanceClassifier
+
+        with patch(
+            "digest.classifiers.relevance_classifier.get_anthropic_client",
+            return_value=client,
+        ):
+            return RelevanceClassifier(api_key="test-key")
+
+    def test_refused_item_is_classified_by_the_fallback(self, mock_anthropic_client):
+        from digest.classifiers.relevance_classifier import _build_cached_system_prompt
+
+        mock_anthropic_client.messages.create.return_value = _refusal()
+        classifier = self._classifier(mock_anthropic_client)
+
+        with patch(
+            "digest.classifiers.relevance_classifier.gemini_generate",
+            return_value=f"```json\n{_HOUSING_VERDICT}\n```",
+        ) as fallback:
+            result = classifier.classify_item(
+                title="Housing Supply and Zoning Reform",
+                content="This paper studies the effect of upzoning on housing construction.",
+            )
+
+        assert result["subtopics"]["abundance"]["relevant"] is True
+        assert result["subtopics"]["abundance"]["reasoning"] == "from the fallback"
+        assert result["fallback_model"] == "gemini-3.5-flash"
+        # Same taxonomy and the same per-item prompt the primary model was sent.
+        prompt = mock_anthropic_client.messages.create.call_args.kwargs["messages"][0]["content"]
+        fallback.assert_called_once_with(prompt, system=_build_cached_system_prompt())
+
+    def test_fallback_is_not_consulted_when_the_model_answers(self, mock_anthropic_client):
+        classifier = self._classifier(mock_anthropic_client)
+
+        with patch("digest.classifiers.relevance_classifier.gemini_generate") as fallback:
+            result = classifier.classify_item(
+                title="Housing Supply and Zoning Reform",
+                content="This paper studies the effect of upzoning on housing construction.",
+            )
+
+        fallback.assert_not_called()
+        assert "fallback_model" not in result
+
+    def test_other_failures_do_not_reach_the_fallback(self, mock_anthropic_client):
+        """Only a refusal is a reason to ask another vendor. A timeout or a
+        truncated response is transient, and the next run retries it."""
+        mock_anthropic_client.messages.create.side_effect = Exception("API error")
+        classifier = self._classifier(mock_anthropic_client)
+
+        with patch("digest.classifiers.relevance_classifier.gemini_generate") as fallback:
+            result = classifier.classify_item(
+                title="Housing Supply and Zoning Reform",
+                content="This paper studies the effect of upzoning on housing construction.",
+            )
+
+        fallback.assert_not_called()
+        assert result is None
+
+    def test_unparseable_fallback_answer_leaves_the_item_unclassified(self, mock_anthropic_client):
+        mock_anthropic_client.messages.create.return_value = _refusal()
+        classifier = self._classifier(mock_anthropic_client)
+
+        with patch(
+            "digest.classifiers.relevance_classifier.gemini_generate",
+            return_value="I cannot help with that.",
+        ):
+            result = classifier.classify_item(
+                title="Housing Supply and Zoning Reform",
+                content="This paper studies the effect of upzoning on housing construction.",
+            )
+
+        assert result is None
+
+    def test_refused_batch_sends_only_the_declined_item_to_the_fallback(self, mock_anthropic_client):
+        """One declined item refuses the whole batch. Each item is then retried
+        alone, so the fallback sees only what the primary model still declines."""
+        answered = mock_anthropic_client._make_response(
+            '{"abundance": {"relevant": true, "topics": ["housing"], "confidence": "high", "reasoning": "primary"}}'
+        )
+        mock_anthropic_client.messages.create.side_effect = [_refusal(), answered, _refusal()]
+        classifier = self._classifier(mock_anthropic_client)
+        items = [
+            {"title": "Zoning reform and housing supply", "content": "Upzoning raised housing construction."},
+            {"title": "Affordable housing and zoning reform", "content": "Multifamily housing supply grew."},
+        ]
+
+        with patch(
+            "digest.classifiers.relevance_classifier.gemini_generate",
+            return_value=_HOUSING_VERDICT,
+        ) as fallback:
+            results = classifier._classify_batch_items(items)
+
+        assert mock_anthropic_client.messages.create.call_count == 3
+        assert fallback.call_count == 1
+        assert results[0]["subtopics"]["abundance"]["reasoning"] == "primary"
+        assert "fallback_model" not in results[0]
+        assert results[1]["subtopics"]["abundance"]["reasoning"] == "from the fallback"
+        assert results[1]["fallback_model"] == "gemini-3.5-flash"
 
 
 class TestPromptCaching:
