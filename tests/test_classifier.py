@@ -137,6 +137,27 @@ class TestClassifyItem:
         # every feed for good. None leaves it unclassified and retryable.
         assert result is None
 
+    def test_truncated_response_leaves_the_item_unclassified(self, mock_anthropic_client):
+        """A model that spends max_tokens on thinking returns no JSON at all."""
+        from digest.classifiers.relevance_classifier import RelevanceClassifier
+
+        truncated = MagicMock()
+        truncated.content = [MagicMock(type="thinking", thinking="")]
+        truncated.stop_reason = "max_tokens"
+        mock_anthropic_client.messages.create.return_value = truncated
+
+        with patch(
+            "digest.classifiers.relevance_classifier.get_anthropic_client",
+            return_value=mock_anthropic_client,
+        ):
+            classifier = RelevanceClassifier(api_key="test-key")
+            result = classifier.classify_item(
+                title="Housing Supply and Zoning Reform",
+                content="This paper studies the effect of upzoning on housing construction.",
+            )
+
+        assert result is None
+
     def test_refusal_leaves_the_item_unclassified(self, mock_anthropic_client):
         """A stop_reason of refusal must not become a `not relevant` verdict.
 

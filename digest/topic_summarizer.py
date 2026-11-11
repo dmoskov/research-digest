@@ -12,12 +12,16 @@ from datetime import date
 from typing import Optional
 
 from digest.db import get_cursor
-from digest.llm import get_anthropic_client, response_text
+from digest.llm import effort_params, get_anthropic_client, refusal_category, response_text
 from digest.scoring import get_subtopic_topics
 from digest.settings import get_config
 from digest.usage import log_usage
 
 logger = logging.getLogger(__name__)
+
+# ~150 tokens of summary, plus room for thinking (it counts toward max_tokens
+# on the models that think by default).
+_SUMMARY_MAX_TOKENS = 2048
 
 
 def compute_item_hash(item_ids: list[int]) -> str:
@@ -207,12 +211,18 @@ def generate_topic_summary(
         client = get_anthropic_client(timeout=60.0)
         response = client.messages.create(
             model=get_config().claude_model,
-            max_tokens=500,
-            temperature=0.3,
+            max_tokens=_SUMMARY_MAX_TOKENS,
             messages=[{"role": "user", "content": prompt}],
+            **effort_params(),
         )
         log_usage(response, "digest_topic_summary")
 
+        refused = refusal_category(response)
+        if refused:
+            # Empty, not the fallback line below: an empty summary is not
+            # cached, so the topic is tried again on the next request.
+            logger.warning("Model declined to summarise topic=%s (refusal: %s)", topic_key, refused)
+            return ""
         summary = response_text(response).strip()
         logger.info(
             "Generated summary for topic=%s: %d chars from %d items",

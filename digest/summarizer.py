@@ -6,7 +6,7 @@ The feed template uses `extract_bullets(2)` which splits on newlines
 and strips leading `- ` prefixes, so we generate that format directly.
 
 Fallback chain on Claude refusal:
-  1. Claude Sonnet (primary)
+  1. Claude (primary — DigestConfig.claude_model_fast)
   2. Extractive summary (immediate, free — pulls first sentences from content)
   3. Gemini Flash retry (async second pass — different content policy)
 
@@ -21,7 +21,7 @@ import time
 
 import anthropic
 
-from digest.llm import response_text
+from digest.llm import effort_params, refusal_category, response_text
 from digest.settings import get_config
 from digest.usage import log_usage
 
@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 # Truncate input content to stay well within context limits
 _MAX_CONTENT_CHARS = 3000
+
+# The bullets themselves are ~100 tokens. The rest is room for thinking, which
+# counts toward max_tokens on the models that think by default.
+_ABSTRACT_MAX_TOKENS = 2048
 
 _SYSTEM_PROMPT = (
     "You are a research digest assistant. Given an article's title, source, "
@@ -138,11 +142,16 @@ def generate_abstract(
     try:
         response = client.messages.create(
             model=get_config().claude_model_fast,
-            max_tokens=300,
+            max_tokens=_ABSTRACT_MAX_TOKENS,
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_msg}],
+            **effort_params(),
         )
         log_usage(response, "digest_abstract")
+        refused = refusal_category(response)
+        if refused:
+            logger.warning("Model declined to summarise '%s' (refusal: %s)", title, refused)
+            return None, True
         if not response.content:
             logger.warning("Empty API response for '%s' (stop=%s)", title, response.stop_reason)
             return None, False

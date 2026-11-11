@@ -180,6 +180,7 @@ Required: `org_name`, `subtopics`, `subtopic_topics`. Everything else is optiona
 | `bot_contact` | Optional email. CrossRef and OpenAlex route callers with a mailto into a faster "polite pool" |
 | `claude_model` | Summarisation model |
 | `claude_model_fast` | Classification model — runs on every item, so this dominates cost |
+| `claude_effort` | Optional `output_config.effort` for every Claude call (`low` … `max`). On models that always think (Claude Opus 5.5, Claude Sonnet 5.5) it is the only control over thinking, latency and cost; `low` suits this workload. Unset, the field is not sent — required for older models that reject it |
 | `gemini_model` | Optional fallback for abstracts Claude declines. Needs the `gemini` extra |
 
 Misconfiguration raises at `configure()` time — empty taxonomy, a subtopic with

@@ -91,3 +91,29 @@ def response_text(response) -> str:
         if getattr(block, "type", None) == "text":
             return block.text
     return ""
+
+
+def effort_params() -> dict:
+    """Keyword arguments carrying ``DigestConfig.claude_effort``, or none.
+
+    Splatted into every ``messages.create()`` call the pipeline makes. Empty
+    when no effort is configured, because not every model accepts the field.
+    """
+    from digest.settings import get_config
+
+    effort = get_config().claude_effort
+    return {"output_config": {"effort": effort}} if effort else {}
+
+
+def refusal_category(response) -> Optional[str]:
+    """Why the model declined this request, or None when it did not.
+
+    The newest models' safety classifiers decline with an ordinary HTTP 200 and
+    ``stop_reason == "refusal"``. The content is then empty or cut off partway,
+    so check this before reading the text. Returns the ``stop_details``
+    category ("cyber", "bio", ...), or "unspecified" for a refusal without one.
+    """
+    if getattr(response, "stop_reason", None) != "refusal":
+        return None
+    category = getattr(getattr(response, "stop_details", None), "category", None)
+    return category if isinstance(category, str) and category else "unspecified"

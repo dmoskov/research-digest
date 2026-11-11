@@ -22,7 +22,9 @@ import anthropic
 
 from digest.llm import (
     anthropic_credentials_available,
+    effort_params,
     get_anthropic_client,
+    refusal_category,
     response_text,
 )
 from digest.scoring import (
@@ -80,6 +82,24 @@ def _cached_system_block() -> list:
             "cache_control": {"type": "ephemeral"},
         }
     ]
+
+
+# Thinking counts toward max_tokens on the models that think by default, so
+# these leave room for it on top of the JSON. A ceiling sized for the JSON
+# alone gets the reply cut off mid-object.
+_SINGLE_MAX_TOKENS = 4096
+_BATCH_MAX_TOKENS = 8192
+
+
+def _require_complete(message) -> None:
+    """Raise unless the model answered in full."""
+    refused = refusal_category(message)
+    if refused:
+        raise ValueError(f"Model declined to classify (refusal: {refused})")
+    if not message.content:
+        raise ValueError(f"Empty API response (stop={message.stop_reason})")
+    if message.stop_reason == "max_tokens":
+        raise ValueError("Response cut off at max_tokens before the JSON was complete")
 
 
 def _log_cache_usage(message, label: str) -> None:
@@ -222,19 +242,18 @@ class RelevanceClassifier:
 
         return relevant_subtopics
 
-    def _call_llm_classify(self, prompt: str, max_tokens: int = 2048) -> Dict:
+    def _call_llm_classify(self, prompt: str, max_tokens: int = _SINGLE_MAX_TOKENS) -> Dict:
         """Make a classification API call and return the parsed JSON result."""
         message = self.client.messages.create(
             model=get_config().claude_model_fast,
             max_tokens=max_tokens,
             system=_cached_system_block(),
             messages=[{"role": "user", "content": prompt}],
+            **effort_params(),
         )
         log_usage(message, "digest_relevance")
         _log_cache_usage(message, "digest_relevance")
-
-        if not message.content:
-            raise ValueError(f"Empty API response (stop={message.stop_reason})")
+        _require_complete(message)
 
         raw = self._extract_json_from_response(response_text(message))
         return json.loads(raw)
@@ -542,14 +561,14 @@ Instructions:
         try:
             message = self.client.messages.create(
                 model=get_config().claude_model_fast,
-                max_tokens=4096,
+                max_tokens=_BATCH_MAX_TOKENS,
                 system=_cached_system_block(),
                 messages=[{"role": "user", "content": prompt}],
+                **effort_params(),
             )
             log_usage(message, "digest_relevance_batch")
             _log_cache_usage(message, "digest_relevance_batch")
-            if not message.content:
-                raise ValueError(f"Empty API response (stop={message.stop_reason})")
+            _require_complete(message)
 
             raw = self._extract_json_from_response(response_text(message))
             llm_results = json.loads(raw)
