@@ -10,6 +10,10 @@ queryable in CloudWatch Logs Insights:
       by service
     | sort cost desc
 
+``cost_usd`` includes prompt-cache writes and reads. ``input_tokens`` is the
+uncached remainder, as the API reports it; the cached tokens are logged as
+``cache_creation_input_tokens`` and ``cache_read_input_tokens``.
+
 A host application with its own accounting can replace it:
 
     from digest.usage import set_usage_logger
@@ -51,6 +55,16 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     "claude-haiku-4": (1.0, 5.0),
 }
 
+CACHE_WRITE_5M_MULTIPLIER = 1.25
+CACHE_WRITE_1H_MULTIPLIER = 2.0
+DEFAULT_CACHE_READ_MULTIPLIER = 0.1
+CACHE_READ_MULTIPLIER: dict[str, float] = {
+    "claude-fable-5-2": 0.025,
+    "claude-fable-5-1": 0.025,
+    "claude-opus-5-5": 0.05,
+    "claude-sonnet-5-5": 0.05,
+}
+
 _unpriced_models: set = set()
 
 _override: Optional[Callable] = None
@@ -83,6 +97,18 @@ def _get_pricing(model: str) -> tuple[float, float]:
     return (0.0, 0.0)
 
 
+def _cache_read_multiplier(model: str) -> float:
+    """Cache-read price as a fraction of the model's input price.
+
+    Most models read at 0.1x; the models listed in CACHE_READ_MULTIPLIER are
+    cheaper. Longest matching prefix first, as in _get_pricing.
+    """
+    matches = [p for p in CACHE_READ_MULTIPLIER if model.startswith(p)]
+    if matches:
+        return CACHE_READ_MULTIPLIER[max(matches, key=len)]
+    return DEFAULT_CACHE_READ_MULTIPLIER
+
+
 def log_usage(response, service: str) -> None:
     """Report token usage and estimated cost for one API call (best-effort)."""
     if _override is not None:
@@ -96,8 +122,17 @@ def log_usage(response, service: str) -> None:
         model = getattr(response, "model", "unknown")
         in_tk = getattr(u, "input_tokens", 0) or 0
         out_tk = getattr(u, "output_tokens", 0) or 0
+        write_tk = getattr(u, "cache_creation_input_tokens", 0) or 0
+        read_tk = getattr(u, "cache_read_input_tokens", 0) or 0
+        write_1h_tk = getattr(getattr(u, "cache_creation", None), "ephemeral_1h_input_tokens", 0) or 0
         price_in, price_out = _get_pricing(model)
-        cost = in_tk * price_in / 1e6 + out_tk * price_out / 1e6
+        cost = (
+            in_tk * price_in
+            + (write_tk - write_1h_tk) * price_in * CACHE_WRITE_5M_MULTIPLIER
+            + write_1h_tk * price_in * CACHE_WRITE_1H_MULTIPLIER
+            + read_tk * price_in * _cache_read_multiplier(model)
+            + out_tk * price_out
+        ) / 1e6
         logger.info(
             json.dumps(
                 {
@@ -106,6 +141,8 @@ def log_usage(response, service: str) -> None:
                     "model": model,
                     "input_tokens": in_tk,
                     "output_tokens": out_tk,
+                    "cache_creation_input_tokens": write_tk,
+                    "cache_read_input_tokens": read_tk,
                     "cost_usd": round(cost, 6),
                 }
             )
